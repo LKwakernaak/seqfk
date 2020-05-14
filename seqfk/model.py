@@ -11,112 +11,36 @@ from parameters import equilibrium, stiffness, ALPHA, LENGTH, RADIUS, PITCH, R_E
 
 LD = lookup_dict = {
     0: "A",
-    1: "C",
-    2: "G",
-    3: "T"
+    1: "T",
+    2: "C",
+    3: "G"
 }
 
 RLD = reverse_lookup_dict = {
     "A" : 0,
-    "C" : 1,
-    "G" : 2,
-    "T" : 3
+    "T" : 1,
+    "C" : 2,
+    "G" : 3
 }
 
 pair_lookup = {
     "AA": 0,
-    "AC": 1,
-    "AG": 2,
-    "AT": 3,
-    "CA": 4,
-    "CC": 5,
-    "CG": 6,
-    "CT": 7,
-    "GA": 8,
-    "GC": 9,
-    "GG": 10,
-    "GT": 11,
-    "TA": 12,
-    "TC": 13,
-    "TG": 14,
-    "TT": 15
+    "AT": 1,
+    "AC": 2,
+    "AG": 3,
+    "TA": 4,
+    "TT": 5,
+    "TC": 6,
+    "TG": 7,
+    "CA": 8,
+    "CT": 9,
+    "CC": 10,
+    "CG": 11,
+    "GA": 12,
+    "GT": 13,
+    "GC": 14,
+    "GG": 15
 }
-
-q_roll = np.array([
-    0.012410451,    #AA
-    0.012372536,    #AC
-    0.079562987,    #AG
-    0.019409417,    #AT
-    0.083496463,    #CA
-    0.063703201,    #CC
-    0.095824007,    #CG
-    0.079562987,    #CT
-    0.03372236,     #GA
-    0.0053117746,   #GC
-    0.063703201,    #GG
-    0.012372536,    #GT
-    0.058653564,    #TA 
-    0.03372236,     #TC
-    0.083496463,    #TG
-    0.012410451     #TT
-])
-
-Q_roll = np.array([
-    126.98464,      #AA
-    148.42141,      #AC
-    143.15931,      #AG
-    123.91326,      #AT
-    73.527282,      #CA
-    126.98464,      #CC
-    113.06128,      #CG
-    97.396194,      #CT
-    97.396194,      #GA
-    123.91326,      #GC
-    130.1586,       #GG
-    83.019248,      #GT
-    113.06128,      #TA
-    143.15931,      #TC
-    146.67053,      #TG
-    130.1586        #TT
-])
-
-q_tilt = np.array([
-    -0.024820902,   #AA
-    -0.0017675051,  #AC
-    -0.030057128,   #AG
-    0,              #AT
-    0.0088826025,   #CA
-    0.0017695334,   #CC
-    0,              #CG
-    0.030057128,    #CT
-    -0.026622916,   #GA
-    0,              #GC
-    -0.0017695334,  #GG
-    -0.0017695334,  #GT
-    0,              #TA
-    0.026622916,    #TC
-    -0.0088826025,  #TG
-    0.024820902     #TT
-])
-
-Q_tilt = np.array([
-    207.73324,      #AA
-    216.86174,      #AC
-    221.16218,      #AG
-    200.28179,      #AT
-    129.10674,      #CA
-    207.73324,      #CC
-    210.62471,      #CG
-    146.17762,      #CT
-    146.17762,      #GA
-    200.28179,      #GC
-    225.01953,      #GG
-    150.88272,      #GT
-    210.62471,      #TA
-    221.16218,      #TC
-    214.38125,      #TG
-    225.01953       #TT
-])
 
 nb.njit()
 def apply(f_vector, sequence):
@@ -217,16 +141,6 @@ def calc_chain_force(positions, sequence):
         force[i] = springconstant*stretch
     return force
 
-@nb.njit()
-def calc_chain_potential(positions, sequence):
-    potential = np.empty(len(positions)-1)
-    for i in range(len(positions) - 1):
-        dx = positions[i + 1] - positions[i]
-        a, b = sequence[i:i + 2]
-        stretch = dx - equilibrium[a, b, 2]
-        springconstant = stiffness[a, b, 2, 2]
-        potential[i] = 1/2*springconstant * stretch**2
-    return potential
 
 def calc_roll_force(positions, sequence):
     roll_angle = np.cos(2*np.pi*positions/10 - 147*np.pi/10)
@@ -236,11 +150,51 @@ def calc_roll_force(positions, sequence):
         springconstant = stiffness[a, b, 5, 5]
         torque = u*springconstant
 
+@nb.njit()
+def rise_potential(positions, sequence):
+    potential = np.empty(len(positions)-1)
+    for i in range(len(positions) - 1):
+        dx = positions[i + 1] - positions[i]
+        a, b = sequence[i:i + 2]
+        stretch = dx - equilibrium[a, b, 2]
+        springconstant = stiffness[a, b, 2, 2]
+        potential[i] = 1/2*springconstant * stretch**2
+    return potential
+
+@nb.njit()
+def roll_potential(positions, sequence):
+    positions = zuiddam_floating_index(positions)
+    roll_angle = np.cos(2*np.pi*positions/10 - 147*np.pi/10)*GAMMA
+
+    potential = np.empty(len(positions)-1)
+
+    for i in range(len(positions)):
+        a,b = sequence[i:i+2]
+        u = roll_angle - equilibrium[a, b, 5]
+        springconstant = stiffness[a, b, 5, 5]
+        potential[i] = .5 * springconstant * u**2
+
+    return potential
+
+@nb.njit()
+def tilt_potential(positions, sequence):
+    positions = zuiddam_floating_index(positions)
+    tilt_angle = np.cos(2*np.pi*positions/10 - 147*np.pi/10)*GAMMA
+
+    potential = np.empty(len(positions)-1)
+
+    for i in range(len(positions)):
+        a,b = sequence[i:i+2]
+        u = tilt_angle - equilibrium[a, b, 4]
+        springconstant = stiffness[a, b, 4, 4]
+        potential[i] = .5 * springconstant * u**2
+
+    return potential
 
 average_tilt_eq = np.average(equilibrium[:,:,3])
 average_tilt_stiff = np.average(stiffness[:,:,3,3])
 @nb.njit()
-def effective_tilt_potential(positions):
+def averaged_tilt_potential(positions):
     positions = zuiddam_floating_index(positions)
     tilt_angle = np.sin(2*np.pi*positions/10 - 147*np.pi/10)*GAMMA
     return 1/2 * average_tilt_stiff*(tilt_angle-average_roll_eq)**2
@@ -248,7 +202,7 @@ def effective_tilt_potential(positions):
 average_roll_eq = np.average(equilibrium[:,:,4])
 average_roll_stiff = np.average(stiffness[:,:,4,4])
 @nb.njit()
-def effective_roll_potential(positions):
+def averaged_roll_potential(positions):
     positions = zuiddam_floating_index(positions)
     roll_angle = np.cos(2*np.pi*positions/10 - 147*np.pi/10)*GAMMA
     return 1/2 * average_roll_stiff*(roll_angle-average_roll_eq)**2
@@ -256,11 +210,10 @@ def effective_roll_potential(positions):
 average_twist_eq = np.average(equilibrium[:,:,5])
 average_twist_stiff = np.average(stiffness[:,:,5,5])
 @nb.njit()
-def effective_twist_potential(positions):
+def averaged_twist_potential(positions):
     positions = zuiddam_floating_index(positions)
     twist_angle = np.ones_like(positions)*2*np.pi/10.17
     return 1/2 * average_twist_stiff*(twist_angle-average_roll_eq)**2
-
 
 
 def parametric_position(position_along_superhelix):
@@ -342,6 +295,8 @@ if __name__ == '__main__':
     decoded_s = decode(encoded_s)
     print("decoded_s", decoded_s)
     print("Matches", diff(s, decoded_s))
+    
+    from sequence import Sequence
 
     s = Sequence()
     print(calc_chain_force(s.sequence, s.positions))
