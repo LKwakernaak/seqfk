@@ -27,7 +27,7 @@ def main(sequence=None,
     :param prep_steps: Number of steps to run before logging data
     :param prep_temp: Temperature at which to prepare
     :param samples: The number of samples to log
-    :param temp: The temperature at which to sample
+    :param temp: The temperature at which to sample in fraction of room temp 300 K
     :param save_every: Save every save_every sample when generating data
     :param seq_length: The length of the sequence 147 by default
     :param selected_iterator: The iterator to use. If none, creates MC iterator
