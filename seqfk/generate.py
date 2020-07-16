@@ -1,136 +1,112 @@
-import matplotlib.pyplot as plt
 import numpy as np
+from progress.bar import Bar
 
+from data import OutputWriter, get_timestamp, write_callfile
 from sequence import Sequence
-from viewer import potential_plot
-
-from tools.grace import GracefullKiller
-
-from inout import OutputWriter
-
-def histogram(sequences):
-    # sequences = np.vstack(sequences)
-
-    keys = np.unique(sequences)
-
-    output = {
-        int(i):np.sum(sequences==i, axis=0) for i in keys
-    }
-
-    # A = np.sum(sequences == 0, axis=1)
-    # C = np.sum(sequences == 1, axis=1)
-    # G = np.sum(sequences == 2, axis=1)
-    # T = np.sum(sequences == 3, axis=1)
-
-    return output
 
 
-def hist_plot(sequences):
-    hist = histogram(sequences)
-    for key in hist.keys():
-        plt.plot(hist[key], label=key)
-    # plt.plot(A, label='A')
-    # plt.plot(C, label='C')
-    # plt.plot(G, label='G')
-    # plt.plot(T, label='T')
-    plt.legend()
-    plt.show()
+def main(sequence=None,
+         prep_steps=1000,
+         prep_temp=None,
+         samples=int(1e7),
+         temp=1. / 3,
+         save_every=10,
+         seq_length=None,
+         selected_iterator=None,
+         p_mutation=None,
+         sequencepotentials=('tilt', 'roll'),
+         averagedpotentials=(),
+         writer=OutputWriter,
+         tension_deformation=0,
+         hist_bounds=None,
+         **kwargs):
+    """
+    Top level function for generating monte carlo data
 
-# np.lib.stride_tricks.as_strided(np.vstack(sequences), (50000, 146, 2), (147,1,1))
-def pair_view(sequence, n=2):
-    sequence = np.asarray(sequence)
-    strides = sequence.strides
-    shape = sequence.shape
+    :param sequence: Sequence object fed in to start. If None, a random sequence is generated
+    :param prep_steps: Number of steps to run before logging data
+    :param prep_temp: Temperature at which to prepare
+    :param samples: The number of samples to log
+    :param temp: The temperature at which to sample
+    :param save_every: Save every save_every sample when generating data
+    :param seq_length: The length of the sequence 147 by default
+    :param selected_iterator: The iterator to use. If none, creates MC iterator
+    :param p_mutation: The chance of mutating the sequence during a step
+    :param sequencepotentials: Which sequence-dependent-potentials to use. Tuple containing 'rise', 'tilt' and or 'roll'
+    :param averagedpotentials: Which averaged potentials to use. Tuple containing 'rise', 'tilt' and or 'roll'
+    :param writer: What writer class to use for logging
+    :param tension_deformation: The deformation due to tension. Ignored if 0
+    :param hist_bounds: The bin edges used for the histogram calculation in the writer class
+    :param kwargs: Further key word arguments passed to the writer class, sequence creator class and stored in the call_file
+    :return:
+    """
+    if prep_temp is None:
+        prep_temp = temp
 
-    if len(shape) == 1:
-        return np.lib.stride_tricks.as_strided(sequence, (shape[0]+1-n, n), (strides[0], strides[0]))
+    timestamp = get_timestamp()
 
-    elif len(shape) == 2:
-        return np.lib.stride_tricks.as_strided(sequence, (shape[0], shape[1]+1-n, n), (strides[0], strides[-1], strides[-1]))
+    # store a file with the function call for later reference
+    write_callfile(timestamp=timestamp,
+                   prep_steps=prep_steps,
+                   prep_temp=prep_temp,
+                   steps=samples,
+                   temp=temp,
+                   save_every=save_every,
+                   seq_length=seq_length,
+                   selected_iterator=selected_iterator,
+                   p_mutation=p_mutation,
+                   sequencepotentials=sequencepotentials,
+                   averagedpotentials=averagedpotentials,
+                   tension_deformation=tension_deformation,
+                   hist_bounds=hist_bounds,
+                   **kwargs
+                   )
 
-def codons(sequence):
-    return pair_view(sequence, n=3)
+    s = Sequence(N=seq_length, selected_iterator=selected_iterator, p_mutation=p_mutation,
+                 sequencepotentials=sequencepotentials,
+                 averagedpotentials=averagedpotentials,
+                 tension_deformation=tension_deformation,
+                 **kwargs)
 
-def encode_pairs(pairs, base=4):
-    shape = pairs.shape
-    indices = shape[-1]
-    weights = np.eye(indices)*(base**np.arange(indices-1,-1, -1))
+    if sequence is not None:
+        s.positions = sequence.positions
+        s.sequence = sequence.sequence
 
-    weights = np.asarray(weights, dtype=np.int8)
+    if prep_steps > 0:  # pre-calculation
+        s.update(steps=prep_steps, temp=prep_temp)
 
-    return np.einsum('kl,ijk->ij', weights, pairs)
+    interrupt_size = int(np.ceil(samples / 1000))  # how often to interrupt to update loading bar
 
-def large_vstack(s):
-    empty = np.empty([len(s), len(s[0])], dtype=s[0].dtype)
-    for i in range(len(s)):
-        empty[i] = s[i]
-
-    return empty
-
-
-if __name__ == '__main__':
-    print('starting')
-
-    s = Sequence()
-    # v1 = Viewer(s)
-
-    # potential_plot(s)
-
-    old = s.sequence.copy()
-
-    energies = []
-
-
-    print(s.sequence)
-
-    sequences = []
-
-    s.update(temp=10, steps=1000)
-
-    # killer = GracefullKiller()
+    s_prev = s.sequence.copy()
 
     i = 0
-    total = int(1e8)
+    total = int(samples)
     try:
-        with OutputWriter() as o:
-            while True:
-                o.write_line(s)
-                # energies.append(s.energy)
-                # sequences.append(s.sequence.copy())
-                s.update(temp=0.1, steps=10)
-                if i%10000 == 0:
-                    print(i, "{:05.2f} %".format(100*i/total))
-                i += 1
-                if i >= total: break
+        with writer(timestamp=timestamp, hist_bounds=hist_bounds, **kwargs) as o:
+            # with Liveplotter() as l:
+            with Bar('Progress', max=samples, suffix='%(index)d/%(max)d [%(elapsed)d / %(eta)d / %(eta_td)s]') as bar:
+                while True:
+                    ds = s_prev - s.sequence
+                    if i % interrupt_size == 0:
+                        s.calc_energy()
+                        bar.next(interrupt_size)
+                        ds = s_prev - s.sequence
+                        # print(s.energy)
+
+                    o.write_line(s)
+
+                    if i >= total - 1:
+                        break
+
+                    dE = s.update(steps=save_every, temp=temp)
+                    i += 1
     except KeyboardInterrupt:
         print('Did', i, 'iterations')
 
-    # plt.plot(energies)
-    # plt.semilogx()
-    # plt.show(block=True)
+    return s
 
 
-    # sequences_stack = large_vstack(sequences)
-
-    # print(s.sequence)
-
-    # print(np.isclose(old, new))
-
-    # potential_plot(s)
-    # hist_plot(sequences)
-
-    # pairs = pair_view(sequences_stack)
-    # encoded_pairs = encode_pairs(pairs)
-
-    # hist_plot(encoded)
-    # hist = histogram(encoded_pairs)
-    #
-    # size = len(pairs)
-    #
-    #
-    # plt.plot(hist[9]/size, label='GC')
-    # plt.plot((hist[0] + hist[12] + hist[15])/size, label='AA+TA+TC')
-    # plt.legend()
-    # plt.xlabel("Basepairs")
-    # plt.ylabel('Frequency')
-    # plt.show()
+if __name__ == '__main__':
+    main(temp=1,
+         samples=1000,
+         p_mutation=0)

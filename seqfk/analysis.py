@@ -1,90 +1,104 @@
-import dask.array as da
-import dask.dataframe as dd
+import os
+from pathlib import Path
 
-from inout import get_file_paths, full_path
-from model import encode
+import dask
 import numba as nb
 import numpy as np
 
-import matplotlib.pyplot as plt
+from data import DataSet, delayed_load, get_callfiles
 
-def load():
-    files = full_path(get_file_paths())
-    file = files[-1]
+file_d = os.path.dirname(__file__)
+cwd = Path(file_d)
+results_path = cwd.joinpath('results/')
 
-    df = dd.read_csv(file)
-    return df
+if not results_path.exists():
+    results_path.mkdir()
 
-
-def encode_sequence(sequences):
-    return sequences.map(encode, meta=(None, 'u1'))
 
 @nb.stencil
 def _to_pairs(encoded_sequence):
-    return encoded_sequence[0,0]*4 + encoded_sequence[0,0+1]
+    """
+    Hidden sub-method of to_pairs that leaves a tail element.
+    """
+    return encoded_sequence[0, 0] * 4 + encoded_sequence[0, 0 + 1]
+
 
 @nb.njit()
 def to_pairs(encoded_sequence):
+    """
+    Stencilled function that translates the sequence to sequence pairs
+    :param encoded_sequence:
+    :return:
+    """
     return _to_pairs(encoded_sequence)[:, :-1]
 
+
+@nb.njit()
 def histogram(sequences):
-    # sequences = np.vstack(sequences)
-    keys = np.arange(16)
-    output = {
-        int(i):np.sum(sequences==i, axis=0) for i in keys
-    }
+    """
+    Calculate the histogram of the sequences
+    :param sequences: Array containing number encoded sequences
+    :return: Histogram with implied bins of the sequence locations.
+    """
+    sequences = np.asarray(sequences)
+    shape = sequences.shape
+    output = np.zeros((16, shape[1]))
+
+    for sequence_index in range(shape[0]):
+        for i, value in enumerate(sequences[sequence_index, :]):
+            output[value, i] += 1
+
     return output
 
+
+def sum_hists(histograms):
+    """
+    Sum like-sized histograms into one histogram.
+    :param histograms: Iterable of histograms
+    :return: Single histogram
+    """
+    h = np.zeros_like(histograms[0])
+    for i in histograms:
+        h += i
+    return h
+
+
+def store_histograms(path, array):
+    array = np.asarray(array).T
+    list = array.tolist()
+    output = [("{}\t" * len(list[i]) + '\n').format(*list[i]) for i in range(len(list))]
+    with open(path, 'w') as f:
+        f.writelines(output)
+
+
+def main():
+    """
+    Store all Sequence histograms of all datasets found in data.
+    """
+
+    callfiles = get_callfiles(None)
+    data = [DataSet(c) for c in callfiles]
+
+    for d in data:
+        if d.analysed or len(d) < 2:
+            continue
+
+        print('analyzing', d.path)
+        delayed_loaded_files = delayed_load(d.sequences)
+        delayed_pairs = [dask.delayed(to_pairs)(sequences) for sequences in delayed_loaded_files]
+        delayed_hists = [dask.delayed(histogram)(pairs) for pairs in delayed_pairs]
+
+        from dask.diagnostics import ProgressBar
+
+        with ProgressBar():
+            hist = dask.delayed(sum_hists)(delayed_hists).compute()
+
+        hist /= np.sum(hist[:, 0])
+
+        name = str(d.callfile).split('.')[0] + '.dat'
+        output_path = results_path.joinpath(name)
+        store_histograms(output_path, hist)
+
+
 if __name__ == '__main__':
-    from inout import get_sequences
-
-    seq = get_sequences()
-    pairs = seq.map_blocks(to_pairs, dtype='uint8')
-
-    print(pairs.compute)
-
-    hist = histogram(pairs)
-
-
-    size = len(pairs)
-
-    plt.plot((hist[9] / size).compute(), label='GC')
-    plt.plot((hist[0] + hist[12] + hist[15]).compute() / size, label='AA+TA+TC')
-    plt.legend()
-    plt.xlabel("Basepairs")
-    plt.ylabel('Frequency')
-    plt.show()
-
-    #sequences = sequences.map(encode, meta=(None, 'u1'))
-    # files = full_path(get_file_paths())
-    # file = files[-1]
-
-    # df = dd.read_csv(file)
-
-    # sequences = df.sequence.map(encode, meta=(None, 'u1'))
-
-    # print(sequences.head())
-
-    # pairs = sequences.apply(to_pairs, meta=(None, 'u1'))
-
-    # print(pairs.head())
-
-    # pair_array = da.stack(pairs)
-
-
-    # histogram(pair_array)
-
-    # hist = histogram(pair_array).compute()
-
-    # hist = np.apply_along_axis(np.bincount, 1, pair_array).visualize('graph.png')
-
-    # print(hist)
-
-    # size = len(pairs)
-
-    # plt.plot(hist[9] / size, label='GC')
-    # plt.plot((hist[0] + hist[12] + hist[15]) / size, label='AA+TA+TC')
-    # plt.legend()
-    # plt.xlabel("Basepairs")
-    # plt.ylabel('Frequency')
-    # plt.show()
+    main()
