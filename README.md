@@ -1,5 +1,5 @@
 # seqfk
-Mechanical DNA sequence analysis using monte carlo simulation of a generalised Frenkel Kantorova model
+Mechanical DNA sequence analysis using monte carlo simulation of a generalised Frenkel-Kontorova rigid base pair model
 
 
 # files
